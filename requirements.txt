@@ -1,0 +1,5 @@
+mujoco==3.3.7
+robot_descriptions==1.21.0
+matplotlib==3.5.3
+numpy==1.26.4
+transforms3d==0.4.2
