@@ -1,6 +1,7 @@
 import mujoco
 import mujoco.viewer
 import numpy as np
+from matplotlib import pyplot as plt
 from transforms3d.euler import quat2euler
 
 from source.data_classes import Filter, Position, SMCGains
@@ -38,10 +39,10 @@ def main() -> None:
     id_mz = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, MZ)
 
     desires_positions = [
-        Position(np.array([2.0, 2.0, 1.0]), 0),
-        Position(np.array([2.0, -2.0, 2.0]), 0),
-        Position(np.array([-2.0, -2.0, 2.0]), 0),
-        Position(np.array([-2.0, 2.0, 1.0]), 0)
+        Position(np.array([4.0, 4.0, 1.0]), 0),
+        Position(np.array([4.0, -4.0, 4.0]), np.pi / 4),
+        Position(np.array([-4.0, -4.0, 3.0]), 0),
+        Position(np.array([-4.0, 4.0, 2.0]), 0)
     ]
 
     pos_idx = 0
@@ -60,6 +61,15 @@ def main() -> None:
     phi_des_prev = 0.0
     theta_des_prev = 0.0
     psi_des_prev = desires_positions[0].yaw
+
+    log_sx = []
+    log_sy = []
+    log_sz = []
+    log_s_phi = []
+    log_s_theta = []
+    log_s_psi = []
+    log_ep = []
+    log_t = []
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
@@ -83,7 +93,7 @@ def main() -> None:
             yaw_ref = desires_positions[pos_idx].yaw
             if np.linalg.norm(pos_ref - pos) < 0.08 and \
                     np.linalg.norm(vel) < 0.15 and \
-                    np.linalg.norm(yaw_ref - psi) < 0.08:
+                    abs(wrap_to_pi(yaw_ref - psi)) < 0.2:
                 pos_idx = (pos_idx + 1) % len(desires_positions)
 
             p_d, v_d, a_d = stable_filter.generate_signal(desires_positions[pos_idx].xyz, dt)
@@ -125,7 +135,6 @@ def main() -> None:
             s_z = e_vz + smc_z.kp * e_z
             uz = a_d[2] + smc_z.kp * e_vz + smc_z.k * sat(s_z, smc_z.eps)
 
-            # Errors
             e_phi = phi_des - phi
             e_theta = theta_des - theta
             e_psi = wrap_to_pi(psi_des - psi)
@@ -168,8 +177,55 @@ def main() -> None:
             data.ctrl[id_my] = ctrl_my
             data.ctrl[id_mz] = ctrl_mz
 
+            log_t.append(len(log_t) * dt)
+            log_ep.append(e_p)
+            log_sx.append(s_x)
+            log_sy.append(s_y)
+            log_sz.append(s_z)
+            log_s_psi.append(s_psi)
+            log_s_theta.append(s_theta)
+            log_s_phi.append(s_phi)
+
             mujoco.mj_step(model, data)
             viewer.sync()
+
+    ep_arr = np.asarray(log_ep)
+    sx_arr = np.asarray(log_sx)
+    sy_arr = np.asarray(log_sy)
+    sz_arr = np.asarray(log_sz)
+    s_psi_arr = np.asarray(log_s_psi)
+    s_theta_arr = np.asarray(log_s_theta)
+    s_phi_arr = np.asarray(log_s_phi)
+
+    plt.figure()
+    plt.plot(log_t, ep_arr[:, 0], label="e_x")
+    plt.plot(log_t, ep_arr[:, 1], label="e_y")
+    plt.plot(log_t, ep_arr[:, 2], label="e_z")
+    plt.title("Position errors")
+    plt.xlabel("t, s")
+    plt.ylabel("m")
+    plt.grid(True)
+    plt.legend()
+
+    plt.figure()
+    plt.plot(log_t, sx_arr, label="s_x")
+    plt.plot(log_t, sy_arr, label="s_y")
+    plt.plot(log_t, sz_arr, label="s_z")
+    plt.title("Sliding surfaces (position)")
+    plt.xlabel("t, s")
+    plt.grid(True)
+    plt.legend()
+
+    plt.figure()
+    plt.plot(log_t, s_psi_arr, label="s_psi")
+    plt.plot(log_t, s_theta_arr, label="s_theta")
+    plt.plot(log_t, s_phi_arr, label="s_phi")
+    plt.title("Sliding surfaces (orientation)")
+    plt.xlabel("t, s")
+    plt.grid(True)
+    plt.legend()
+
+    plt.show()
 
 
 if __name__ == "__main__":
