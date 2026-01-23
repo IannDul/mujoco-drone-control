@@ -23,6 +23,7 @@ MZ = "z_moment"
 
 # TODO: kp -> lambda
 # TODO: compress loop
+# TODO: add dataclasses
 def main() -> None:
     model = mujoco.MjModel.from_xml_path(MODEL_PATH)
     data = mujoco.MjData(model)
