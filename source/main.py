@@ -1,18 +1,21 @@
 import mujoco
 import mujoco.viewer
 import numpy as np
-from matplotlib import pyplot as plt
 from transforms3d.euler import quat2euler
 
-from source.data_classes import Filter, Position, SMCGains
+from source.data_classes import Filter, Position, SMCGains, SimLogs
+from source.graphics import show_graphics
 from source.utils import clip_ctrl, wrap_to_pi, sat
 
 #  Path to \mujoco_menagerie\bitcraze_crazyflie_2\scene.xml
-MODEL_PATH = r""
+MODEL_PATH = r"D:\PythonProjects\mujoco_menagerie\bitcraze_crazyflie_2\scene.xml"
 
 # sensors
 QUAT_SENSOR = "body_quat"
 GYRO_SENSOR = "body_gyro"
+
+# camera
+CAMERA = "track"
 
 # actuators
 BODY_THRUST = "body_thrust"
@@ -20,19 +23,23 @@ MX = "x_moment"
 MY = "y_moment"
 MZ = "z_moment"
 
+# constants
+MASS = 0.027
+G = 9.81
+JX, JY, JZ = 2.3951e-5, 2.3951e-5, 3.2347e-5
+GX, GY, GZ = -0.00001, -0.00001, -0.00001
 
-# TODO: kp -> lambda
-# TODO: compress loop
-# TODO: add dataclasses
-def main() -> None:
+# limits
+MAX_TILT = np.deg2rad(20.0)
+MAX_U_XY = 1.0
+
+
+def run() -> SimLogs:
     model = mujoco.MjModel.from_xml_path(MODEL_PATH)
     data = mujoco.MjData(model)
+    logs = SimLogs()
 
-    m = 0.027
-    g = 9.81
-    jx, jy, jz = 2.3951e-5, 2.3951e-5, 3.2347e-5
     dt = float(model.opt.timestep)
-    gx, gy, gz = -0.00001, -0.00001, -0.00001
 
     id_thrust = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, BODY_THRUST)
     id_mx = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, MX)
@@ -40,18 +47,19 @@ def main() -> None:
     id_mz = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, MZ)
 
     desires_positions = [
-        Position(np.array([4.0, 4.0, 1.0]), 0),
-        Position(np.array([4.0, -4.0, 4.0]), np.pi / 4),
-        Position(np.array([-4.0, -4.0, 3.0]), 0),
-        Position(np.array([-4.0, 4.0, 2.0]), 0)
+        Position((4.0, 4.0, 1.0), 0),
+        Position((4.0, -4.0, 4.0), np.pi / 4),
+        Position((-4.0, -4.0, 3.0), 0),
+        Position((-4.0, 4.0, 2.0), 0)
     ]
 
     pos_idx = 0
 
-    stable_filter = Filter(omega=2, ksi=1, x=desires_positions[0].xyz, dx=np.zeros(3, dtype=float))
-
-    max_tilt = np.deg2rad(20.0)
-    max_u_xy = 1.0
+    stable_filter = Filter(omega=2,
+                           ksi=1,
+                           x=np.array(desires_positions[0].xyz, dtype=float),
+                           dx=np.zeros(3, dtype=float)
+                           )
 
     smc_xy = SMCGains(kp=1.2, kd=1, k=0.8, eps=0.10)
     smc_z = SMCGains(kp=1.8, kd=1, k=1.2, eps=0.08)
@@ -62,15 +70,6 @@ def main() -> None:
     phi_des_prev = 0.0
     theta_des_prev = 0.0
     psi_des_prev = desires_positions[0].yaw
-
-    log_sx = []
-    log_sy = []
-    log_sz = []
-    log_s_phi = []
-    log_s_theta = []
-    log_s_psi = []
-    log_ep = []
-    log_t = []
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
@@ -97,7 +96,9 @@ def main() -> None:
                     abs(wrap_to_pi(yaw_ref - psi)) < 0.2:
                 pos_idx = (pos_idx + 1) % len(desires_positions)
 
-            p_d, v_d, a_d = stable_filter.generate_signal(desires_positions[pos_idx].xyz, dt)
+            p_d, v_d, a_d = stable_filter.generate_signal(
+                np.array(desires_positions[pos_idx].xyz, dtype=float), dt
+            )
 
             e_p = p_d - pos
             e_v = v_d - vel
@@ -110,16 +111,16 @@ def main() -> None:
             ux = a_d[0] + smc_xy.kp * e_v[0] + smc_xy.k * sat(s_x, smc_xy.eps)
             uy = a_d[1] + smc_xy.kp * e_v[1] + smc_xy.k * sat(s_y, smc_xy.eps)
 
-            ux = float(np.clip(ux, -max_u_xy, max_u_xy))
-            uy = float(np.clip(uy, -max_u_xy, max_u_xy))
+            ux = float(np.clip(ux, -MAX_U_XY, MAX_U_XY))
+            uy = float(np.clip(uy, -MAX_U_XY, MAX_U_XY))
 
             cos_psi = np.cos(desires_positions[pos_idx].yaw)
             sin_psi = np.sin(desires_positions[pos_idx].yaw)
-            theta_des = (ux * cos_psi + uy * sin_psi) / g
-            phi_des = (ux * sin_psi - uy * cos_psi) / g
+            theta_des = (ux * cos_psi + uy * sin_psi) / G
+            phi_des = (ux * sin_psi - uy * cos_psi) / G
 
-            theta_des = float(np.clip(theta_des, -max_tilt, max_tilt))
-            phi_des = float(np.clip(phi_des, -max_tilt, max_tilt))
+            theta_des = float(np.clip(theta_des, -MAX_TILT, MAX_TILT))
+            phi_des = float(np.clip(phi_des, -MAX_TILT, MAX_TILT))
             psi_des = desires_positions[pos_idx].yaw
 
             phi_des_dot = (phi_des - phi_des_prev) / dt
@@ -156,17 +157,17 @@ def main() -> None:
             # Real u
             tilt_comp = np.cos(phi) * np.cos(theta)
             tilt_comp = float(np.clip(tilt_comp, 0.2, 1))
-            thrust = m * (g + uz) / tilt_comp
+            thrust = MASS * (G + uz) / tilt_comp
             thrust = clip_ctrl(model, id_thrust, thrust)
 
-            tau_x = jx * u_phi
-            tau_y = jy * u_theta
-            tau_z = jz * u_psi
+            tau_x = JX * u_phi
+            tau_y = JY * u_theta
+            tau_z = JZ * u_psi
 
             # torque = ctrl * gear
-            ctrl_mx = tau_x / gx
-            ctrl_my = tau_y / gy
-            ctrl_mz = tau_z / gz
+            ctrl_mx = tau_x / GX
+            ctrl_my = tau_y / GY
+            ctrl_mz = tau_z / GZ
 
             ctrl_mx = clip_ctrl(model, id_mx, ctrl_mx)
             ctrl_my = clip_ctrl(model, id_my, ctrl_my)
@@ -178,56 +179,17 @@ def main() -> None:
             data.ctrl[id_my] = ctrl_my
             data.ctrl[id_mz] = ctrl_mz
 
-            log_t.append(len(log_t) * dt)
-            log_ep.append(e_p)
-            log_sx.append(s_x)
-            log_sy.append(s_y)
-            log_sz.append(s_z)
-            log_s_psi.append(s_psi)
-            log_s_theta.append(s_theta)
-            log_s_phi.append(s_phi)
+            logs.append(data.time,
+                        s_x, s_y, s_z,
+                        s_phi, s_theta, s_psi,
+                        e_p)
 
             mujoco.mj_step(model, data)
             viewer.sync()
 
-    ep_arr = np.asarray(log_ep)
-    sx_arr = np.asarray(log_sx)
-    sy_arr = np.asarray(log_sy)
-    sz_arr = np.asarray(log_sz)
-    s_psi_arr = np.asarray(log_s_psi)
-    s_theta_arr = np.asarray(log_s_theta)
-    s_phi_arr = np.asarray(log_s_phi)
-
-    plt.figure()
-    plt.plot(log_t, ep_arr[:, 0], label="e_x")
-    plt.plot(log_t, ep_arr[:, 1], label="e_y")
-    plt.plot(log_t, ep_arr[:, 2], label="e_z")
-    plt.title("Position errors")
-    plt.xlabel("t, s")
-    plt.ylabel("m")
-    plt.grid(True)
-    plt.legend()
-
-    plt.figure()
-    plt.plot(log_t, sx_arr, label="s_x")
-    plt.plot(log_t, sy_arr, label="s_y")
-    plt.plot(log_t, sz_arr, label="s_z")
-    plt.title("Sliding surfaces (position)")
-    plt.xlabel("t, s")
-    plt.grid(True)
-    plt.legend()
-
-    plt.figure()
-    plt.plot(log_t, s_psi_arr, label="s_psi")
-    plt.plot(log_t, s_theta_arr, label="s_theta")
-    plt.plot(log_t, s_phi_arr, label="s_phi")
-    plt.title("Sliding surfaces (orientation)")
-    plt.xlabel("t, s")
-    plt.grid(True)
-    plt.legend()
-
-    plt.show()
+    return logs
 
 
 if __name__ == "__main__":
-    main()
+    simLogs: SimLogs = run()
+    show_graphics(simLogs)

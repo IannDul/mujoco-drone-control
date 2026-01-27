@@ -17,7 +17,3 @@ def sat(s: float, eps: float) -> float:
     if s < -eps:
         return -1.0
     return s / eps
-
-
-if __name__ == '__main__':
-    pass
