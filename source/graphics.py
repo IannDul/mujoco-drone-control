@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot as plt
 
-from source.data_classes import SimLogs
+from source.models import SimLogs
 
 
 def show_graphics(logs: SimLogs):
