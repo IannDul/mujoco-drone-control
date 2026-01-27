@@ -1,13 +1,13 @@
 from dataclasses import dataclass
-from typing import List
 
 import mujoco
 import numpy as np
 from transforms3d.euler import quat2euler
 
 from source.config import ModelNames, PhysicsParams, ControlLimits
-from source.models import Position, Filter, SMCGains
+from source.models import Filter, SMCGains
 from source.utils import wrap_to_pi, sat, clip_ctrl
+from source.wp_queue import WayPointsQueue
 
 
 @dataclass(frozen=True)
@@ -24,7 +24,7 @@ class SMCController:
                  names: ModelNames,
                  physics: PhysicsParams,
                  limits: ControlLimits,
-                 waypoints: List[Position],
+                 waypoints: WayPointsQueue,
                  stable_filter: Filter,
                  smc_xy: SMCGains,
                  smc_z: SMCGains,
@@ -36,9 +36,7 @@ class SMCController:
         self._physics = physics
         self._limits = limits
 
-        self._waypoints = list(waypoints)
-        if not self._waypoints:
-            raise ValueError("Waypoints must not be empty")
+        self._waypoints = waypoints
 
         self._pos_idx = 0
         self._filter = stable_filter
@@ -51,7 +49,7 @@ class SMCController:
 
         self._phi_des_prev = 0.0
         self._theta_des_prev = 0.0
-        self._psi_des_prev = self._waypoints[0].yaw
+        self._psi_des_prev = waypoints.get_current().yaw
 
         self._actuators = self.__get_actuators()
 
@@ -80,16 +78,19 @@ class SMCController:
         vel = np.array([v_x, v_y, v_z], dtype=float)
 
         # check if point has been achieved
-        pos_ref = self._waypoints[self._pos_idx].xyz
-        yaw_ref = self._waypoints[self._pos_idx].yaw
+        pos_ref = self._waypoints.get_current().xyz
+        yaw_ref = self._waypoints.get_current().yaw
 
         if np.linalg.norm(pos_ref - pos) < 0.08 and \
                 np.linalg.norm(vel) < 0.15 and \
                 abs(wrap_to_pi(yaw_ref - psi)) < 0.2:
-            self._pos_idx = (self._pos_idx + 1) % len(self._waypoints)
+            if self._waypoints.update_current():
+                self._phi_des_prev = 0.0
+                self._theta_des_prev = 0.0
+                self._psi_des_prev = self._waypoints.get_current().yaw
 
         p_d, v_d, a_d = self._filter.generate_signal(
-            np.array(self._waypoints[self._pos_idx].xyz, dtype=float), self._dt
+            np.array(self._waypoints.get_current().xyz, dtype=float), self._dt
         )
 
         e_p = p_d - pos
@@ -106,14 +107,14 @@ class SMCController:
         ux = float(np.clip(ux, -self._limits.max_u_xy, self._limits.max_u_xy))
         uy = float(np.clip(uy, -self._limits.max_u_xy, self._limits.max_u_xy))
 
-        cos_psi = np.cos(self._waypoints[self._pos_idx].yaw)
-        sin_psi = np.sin(self._waypoints[self._pos_idx].yaw)
+        cos_psi = np.cos(self._waypoints.get_current().yaw)
+        sin_psi = np.sin(self._waypoints.get_current().yaw)
         theta_des = (ux * cos_psi + uy * sin_psi) / self._physics.g
         phi_des = (ux * sin_psi - uy * cos_psi) / self._physics.g
 
         theta_des = float(np.clip(theta_des, -self._limits.max_tilt, self._limits.max_tilt))
         phi_des = float(np.clip(phi_des, -self._limits.max_tilt, self._limits.max_tilt))
-        psi_des = self._waypoints[self._pos_idx].yaw
+        psi_des = self._waypoints.get_current().yaw
 
         phi_des_dot = (phi_des - self._phi_des_prev) / self._dt
         theta_des_dot = (theta_des - self._theta_des_prev) / self._dt

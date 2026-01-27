@@ -3,9 +3,11 @@ import mujoco.viewer
 import numpy as np
 
 from source.config import ModelNames, PhysicsParams, ControlLimits
+from source.console_reader import start_console_reader_thread
 from source.controller import SMCController
 from source.graphics import show_graphics
 from source.models import Filter, Position, SMCGains, SimLogs
+from source.wp_queue import WayPointsQueue
 
 
 def run() -> SimLogs:
@@ -35,8 +37,13 @@ def run() -> SimLogs:
     smc_theta = SMCGains(kp=0.8, kd=1, k=0.20, eps=0.05)
     smc_psi = SMCGains(kp=0.6, kd=1, k=0.15, eps=0.05)
 
+    initial_position = Position((0.0, 0.0, 1.0), 0)
+    wp_queue = WayPointsQueue(initial_position)
+
+    start_console_reader_thread(wp_queue)
+
     controller = SMCController(model, names, physics,
-                               limits, waypoints, stable_filter,
+                               limits, wp_queue, stable_filter,
                                smc_xy, smc_z, smc_phi, smc_theta, smc_psi)
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
