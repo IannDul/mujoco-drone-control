@@ -18,16 +18,11 @@ def run() -> SimLogs:
     data = mujoco.MjData(model)
     logs = SimLogs()
 
-    waypoints = [
-        Position((4.0, 4.0, 1.0), 0),
-        Position((4.0, -4.0, 4.0), np.pi / 4),
-        Position((-4.0, -4.0, 3.0), 0),
-        Position((-4.0, 4.0, 2.0), 0)
-    ]
+    initial_position = Position((0.0, 0.0, 1.0), 0)
 
     stable_filter = Filter(omega=2,
                            ksi=1,
-                           x=np.array(waypoints[0].xyz, dtype=float),
+                           x=np.array(initial_position.xyz, dtype=float),
                            dx=np.zeros(3, dtype=float)
                            )
 
@@ -37,7 +32,6 @@ def run() -> SimLogs:
     smc_theta = SMCGains(kp=0.8, kd=1, k=0.20, eps=0.05)
     smc_psi = SMCGains(kp=0.6, kd=1, k=0.15, eps=0.05)
 
-    initial_position = Position((0.0, 0.0, 1.0), 0)
     wp_queue = WayPointsQueue(initial_position)
 
     start_console_reader_thread(wp_queue)
